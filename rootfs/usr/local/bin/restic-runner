@@ -20,7 +20,7 @@
 
 # * Defaults
 
-config_dir=/home/fciocchetti/Work/satoshi/tmp/restic-runner/.config/backup/restic
+config_dir=${RESTIC_RUNNER_CONFIG_DIR:-$HOME/.config/backup/restic}
 
 # * Variables
 
