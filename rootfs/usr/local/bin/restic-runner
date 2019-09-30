@@ -1,0 +1,619 @@
+#!/bin/bash
+
+# restic-runner
+# <http://github.com/alphapapa/restic-runner>
+
+# * Instructions
+
+# Repository config files should specify these variables:
+
+# RESTIC_REPOSITORY: Path to repository
+# RESTIC_PASSWORD_FILE: Path to password file
+# du: If "true", a disk usage report will be generated (default: false).
+
+# Backup set config files should specify these variables:
+
+# tag: Tag string for backup set.
+# include_paths: An array of strings, each of which is a path to backup.
+# exclude_patterns: An array of strings, each of which is an exclude glob pattern.
+# keep_policy: An array of "--keep-period N" strings (unquoted in the array)
+
+# * Defaults
+
+config_dir=/home/fciocchetti/Work/satoshi/tmp/restic-runner/.config/backup/restic
+
+# * Variables
+
+# Array of temporary paths to delete on exit.
+temp_paths=()
+
+# * Functions
+
+# ** Script functions
+
+function debug {
+    if [[ $debug ]]
+    then
+        function debug {
+            echo "DEBUG: $@" >&2
+        }
+        debug "$@"
+    else
+        function debug {
+            true
+        }
+    fi
+}
+function error {
+    echo "ERROR: $@" >&2
+    ((errors++))  # Initializes automatically
+}
+function die {
+    error "$@"
+    exit $errors
+}
+function usage {
+    cat <<EOF
+$0 [OPTIONS] ...?
+
+https://github.com/alphapapa/restic-runner
+
+See restic-runner's readme for more information.
+
+Options
+  -d, --debug    Print debug info
+  -h, --help     I need somebody!
+  -v, --verbose  Verbose output
+EOF
+}
+function log {
+    echo -e "LOG ($(date "+%Y-%m-%d %H:%M:%S")): $@" >&2
+}
+
+function cleanup {
+    # Remove temporary paths (${temp_paths[@]}).
+    for path in "${temp_paths[@]}"
+    do
+        if [[ -r $path ]]
+        then
+            debug "Deleting temporary path: $path"
+            rm -rf "$path"
+        else
+            debug "Temporary path doesn't exist, not deleting: $path"
+        fi
+    done
+
+    if [[ $mount_point ]]
+    then
+        debug "Unmounting repo from: $mount_point"
+
+        fusermount -u "$mount_point" || error "Unable to unmount repo from: $mount_point"
+    fi
+}
+
+function verbose {
+    if [[ $verbose ]]
+    then
+        function verbose {
+            echo "VERBOSE: $@" >&2
+        }
+        verbose "$@"
+    else
+        function verbose {
+            true
+        }
+    fi
+}
+
+# ** Helper functions
+
+function exclude_file {
+    # Echo path to temp file containing exclude patterns.
+
+    local exclude_file=$(mktemp) || die "Can't get tempfile"
+    temp_paths+=("$exclude_file")
+
+    for pattern in "${exclude_patterns[@]}"
+    do
+        echo "$pattern" >>"$exclude_file"
+    done
+
+    echo "$exclude_file"
+}
+
+function exclude_if_present {
+    # Echo "--exclude-if-present FILENAME" for each filename in ${exclude_if_present[@]}
+
+    for filename in "${exclude_if_present[@]}"
+    do
+        echo --exclude-if-present "$filename"
+    done
+}
+
+function echo_option_with_arg {
+    # Echo "--$1 arg1 --$1 arg2 ..." for arg in array var named $2.
+    # See <https://stackoverflow.com/a/47123753/712624>.
+
+    # MAYBE: Use this for exclude_if_present.
+
+    local array_name
+    declare -n array_name="$2"
+
+    for arg in "${array_name[@]}"
+    do
+        echo -n --$1 "\"$arg\""
+        echo -n " "
+    done
+}
+
+function repo_du {
+    du -bs "$RESTIC_REPOSITORY" | awk '{print $1}'
+}
+
+function du_enabled {
+    [[ $du = true ]]
+}
+
+function tag {
+    # Echo "--tag TAG" if $tag is set, otherwise nothing.
+
+    if [[ $tag ]]
+    then
+        echo "--tag $tag"
+    fi
+}
+
+function hostname {
+    # Echo "--hostname HOSTNAME" if RESTIC_HOSTNAME is set, otherwise nothing.
+
+    if [[ ! -z $RESTIC_HOSTNAME ]]
+    then
+        echo "--host $RESTIC_HOSTNAME"
+    fi
+}
+
+function snapshot-ids {
+    # Return list of snapshot IDs
+
+    # Disable du
+    unset du
+
+    restic snapshots \
+           --tag "$tag" \
+        | head -n -2 \
+        | tail -n +3 \
+        | awk '/^[^ ]/ { print $1 }'
+}
+
+function human_bytes {
+    # Return bytes ($1) converted to MB, or GB with 3 decimal places,
+    # as appropriate.
+    local bytes=$1
+
+    # Remove initial "-" for negative numbers
+    bytes=${bytes/-/}
+
+    if [[ $bytes -ge $(( 1024 ** 3 )) ]]
+    then
+        local suffix=GB
+        local expt=3
+        local scale=3
+    else
+        local suffix=MB
+        local expt=2
+        local scale=0
+    fi
+
+    echo $(bc <<<"scale=$scale; $bytes / (1024^$expt)") $suffix
+}
+
+function human_duration {
+    # Return human-friendly difference between timestamps ($1 and $2).
+    # $2 should be the later timestamp.  Timestamps should be strings
+    # in any form that GNU date accepts.
+
+    local ts1=$(date +%s --date "$1")
+    local ts2=$(date +%s --date "$2")
+    local difference=$(( $ts2 - $ts1 ))
+
+    local hours=$(bc <<<"$difference / 60 / 60")
+    local minutes=$(bc <<<"$difference / 60 % 60")
+    local seconds=$(bc <<<"$difference % 60")
+
+    local time
+    [[ $hours -gt 0 ]] && time="${hours}h"
+    [[ $minutes -gt 0 ]] && time="${time}${minutes}m"
+    [[ $seconds -gt 0 ]] && time="${time}${seconds}s"
+    [[ $time ]] || time="0s"
+
+    echo "$time"
+}
+
+function diff_bytes {
+    # Return humanized difference between two byte counts, i.e. (($1 - $2)).
+
+    # Ensure both arguments are passed
+    if ! [[ $1 && $2 ]]
+    then
+        error "Only one argument passed to diff_bytes."
+        return 1
+    fi
+
+    local difference=$(( $1 - $2 ))
+    local human=$(human_bytes $difference)
+
+    if [[ $difference -gt -1 ]]
+    then
+        local plus_minus="+"
+    else
+        local plus_minus="-"
+    fi
+
+    echo "${plus_minus}${human}"
+}
+
+# *** diff helpers
+
+# TODO: Use a --filter option with multiple arguments
+
+function added {
+    awk '/^+/ {print $0}'
+}
+function modified {
+    awk '/^M/ {print $0}'
+}
+function added_and_modified {
+    awk '! /^M|+/ {$0=""; print $NF}'
+}
+function removed {
+    awk '/^-/ {print $0}'
+}
+
+# ** Commands
+
+function backup {
+    log "BACKING UP..."
+
+    local exclude_file=$(exclude_file)
+    temp_paths+=("$exclude_file")
+
+    # Cleanup exclude file on exit
+    trap cleanup EXIT INT TERM
+
+    restic backup \
+           --one-file-system \
+           --exclude-caches \
+           $(exclude_if_present) \
+           $(hostname) \
+           --exclude-file "$exclude_file" \
+           --tag "$tag" \
+           "${include_paths[@]}"
+}
+function check {
+    log "CHECKING..."
+
+    restic check
+}
+function diff {
+    log "DIFFING..."
+
+    # Choose output filter
+    # TODO: Make this more flexible, so any combination may be used.
+
+    # TODO: Process options given after the "diff" command instead of
+    # before it.  I think that will be easier.
+    filter=cat
+    if [[ $added && $modified ]]
+    then
+        filter=added_and_modified
+    elif [[ $added ]]
+    then
+        filter=added
+    elif [[ $modified ]]
+    then
+        filter=modified
+    elif [[ $removed ]]
+    then
+        filter=removed
+    fi
+
+    # Choose snapshot IDs
+    if [[ ${rest[0]} && ${rest[1]} ]]
+    then
+        debug "Using given snapshots"
+
+        snapshot1=${rest[0]}
+        snapshot2=${rest[1]}
+    elif [[ ${rest[0]} ]]
+    then
+        debug "Using latest snapshot and ${rest[0]}"
+
+        snapshots=($(snapshot-ids))
+        snapshot1=${rest[0]}
+        snapshot2=${snapshots[$(( ${#snapshots[@]} - 1))]}  # Latest
+    else
+        debug "Using latest two snapshots"
+
+        snapshots=($(snapshot-ids))
+
+        # Ensure there are two snapshots
+        if [[ ${#snapshots[@]} -lt 2 ]]
+        then
+            die "Only one snapshot ID found: ${snapshots[@]}"
+        fi
+
+        snapshot1=${snapshots[-2]}
+        snapshot2=${snapshots[-1]}
+    fi
+
+    log "Diff from $snapshot1 to $snapshot2"
+
+    restic diff $snapshot1 $snapshot2 | $filter
+}
+
+function expire {
+    log "FORGETTING AND PRUNING..."
+
+    # TODO: Make prune optional or separate.
+    restic forget \
+           $(tag) \
+           --prune ${keep_policy[@]}
+}
+function passthrough {
+    # Pass command through to restic.
+    debug "Running: restic ${rest[@]}"
+
+    # NOTE: Not sure if that should be quoted.
+    restic "${rest[@]}"
+}
+function init {
+    log "INITIALIZING..."
+
+    restic init
+}
+
+function mount {
+    # Mount repo to given path ($1 or ${rest[0]}).
+    log "MOUNTING..."
+
+    local mount_point="$1"
+    [[ $mount_point ]] || local mount_point="${rest[0]}"
+    [[ -r $mount_point ]] || die "Mount point unreadable: $mount_point"
+
+    restic mount "$mount_point"
+}
+
+function verify-randomly {
+    # Verify a number ($rest) of random files from a snapshot
+    # ($snapshot, default to latest) by restoring them to a temporary
+    # directory and checking Restic's exit status.
+
+    # FIXME: Should only compare when --compare is used, otherwise
+    # should just try to cat the files (although I don't know if we
+    # can catch IO errors in case reading a file from the mounted repo
+    # fails; does cat exit nonzero in that case?).  Neglected this
+    # when the function was rewritten to use mounting instead of
+    # restoring to temp dirs.
+
+    debug "Verifying randomly..."
+
+    # Disable disk usage report for this command since the repo size
+    # doesn't change from it.
+    unset du
+
+    # Number of files.  In order to get paths to files and not
+    # directories, we must check the type of each path.  Since some
+    # paths might be directories, and if discarded would decrease the
+    # number of files checked, we use a much greater number and then
+    # gather the actual number of files that we want.
+    local num_files=${rest:-10}
+    local num_paths=$((num_files * 100))
+
+    # Get snapshot ID.
+    local snapshot=$snapshot
+    if ! [[ $snapshot ]] ||  [[ $snapshot = latest ]]
+    then
+        debug "Getting latest snapshot ID..."
+        snapshot=$(snapshot-ids | tail -n1) || die "Unable to get latest snapshot ID"
+    fi
+
+    # Get paths from snapshot.
+    debug "Listing $num_paths paths in snapshot: $snapshot"
+    local paths
+    readarray -t paths < <(restic ls $snapshot | shuf -n $num_paths)
+    [[ $paths ]] || die "Unable to list paths in snapshot: $snapshot"
+
+    # Mount repo.  Since "restic mount" doesn't background itself (even
+    # though it says to unmount when done, while simply SIGINT'ing it
+    # causes it to unmount and exit), we have to background it, save its
+    # PID, and then spin, waiting for the mounted repo to become available.
+    local mount_output=$(mktemp) || die "Unable to make temp output file."
+    temp_paths+=("$mount_output")
+    trap cleanup EXIT INT TERM
+
+    mount_point=$(mktemp -d) || die "Unable to make temp mount point dir."
+    # FIXME: Cleanup mount point.
+
+    debug "Mounting repo at: $mount_point"
+    mount "$mount_point" &>"$mount_output" &
+
+    local attempts=0
+    while [[ 1 ]]
+    do
+        if [[ $attempts -ge 10 ]]
+        then
+            die "Mounted repo never became available."
+            break  # Not sure if necessary, but it might be sometimes.
+        fi
+
+        if grep "Now serving the repository" "$mount_output"
+        then
+            debug "Mounted repo available: proceeding..."
+            break
+        else
+            ((attempts++))
+            debug "Mounted repo not yet available ($attempts attempts): waiting..."
+            sleep 1
+        fi
+    done
+
+    log "VERIFYING $num_files files from snapshot $snapshot..."
+
+    local snapshot_prefix="$mount_point/ids/$snapshot/"
+
+    # Compare with live versions
+    log "COMPARING with live versions..."
+
+    local num_compared=0
+    for path in "${paths[@]}"
+    do
+        [[ $num_compared -ge $num_files ]] && break
+
+        local snapshotted_path="${snapshot_prefix}/${path}"
+
+        if [[ -d $path ]]
+        then
+            debug "Ignoring directory: $snapshotted_path"
+
+        elif [[ -f $path ]]
+        then
+            debug $(printf "Comparing file %q to %q" "$path" "$snapshotted_path")
+            verbose $(printf "Comparing file: %q" "$path")
+
+            cmp "$path" "$snapshotted_path" || error "File differs: $path"
+            ((num_compared++))
+        fi
+    done
+}
+
+# * Args
+
+args=$(getopt -n "$0" -o dhv -l compare,debug,repo:,set:,snapshot:,tag:,help,added,modified,removed,verbose -- "$@") || exit 1
+eval set -- "$args"
+
+while true
+do
+    case "$1" in
+        -d|--debug)
+            debug=true
+            verbose=true
+            ;;
+        -h|--help)
+            usage
+            exit
+            ;;
+        -v|--verbose)
+            verbose=true
+            ;;
+        --compare)
+            compare=true
+            ;;
+        --repo)
+            # Destination repo
+            shift
+            repo=$1
+            ;;
+        --set)
+            # Backup set
+            shift
+            set=$1
+            ;;
+        --snapshot)
+            shift
+            snapshot=$1
+            ;;
+        --tag)
+            # Backup tag
+            shift
+            tag=$1
+            ;;
+        --added)
+            added=true
+            ;;
+        --modified)
+            modified=true
+            ;;
+        --removed)
+            removed=true
+            ;;
+        --)
+            # Remaining args
+            shift
+            command="$1"
+            shift
+            rest=("$@")
+            break
+            ;;
+    esac
+
+    shift
+done
+
+debug "ARGS: $args"
+debug "Command: $command"
+debug "Rest: ${rest[@]}"
+
+# ** Verify required arguments
+
+[[ $command ]] || die "No command specified"
+
+# * Include repo and set files
+
+# TODO: Disable glob expansion around these.
+
+if [[ -f $config_dir/runner ]]
+then
+    source "$config_dir/runner" \
+        || die "Can't source global config file: $config_dir/runner"
+fi
+if [[ $repo ]]
+then
+    source $config_dir/repos/$repo \
+        || die "Can't source repo file: $config_dir/repos/$repo"
+fi
+if [[ $set ]]
+then
+    source $config_dir/sets/$set \
+        || die "Can't source set file: $config_dir/sets/$set"
+fi
+
+# * Main
+
+log "REPO:$repo SET:$set COMMAND:$command"
+
+# Forward "command" to "passthrough"
+[[ $command = command ]] && command=passthrough
+
+# Verify command
+# FIXME: If a snapshot ID is given to the diff command, this will give an error.
+type $command &>/dev/null || die "No such command: $command"
+
+# Log before command.  NOTE: The recorded duration includes running
+# du.  Restic outputs its own duration, so there's no reason to
+# duplicate that, but it might be useful to know how much extra time
+# is taken by running du before and after.
+date_before=$(date)
+du_enabled && du_before=$(repo_du)
+
+# Run command (backup, forget, prune, etc.)
+$command || die "$command failed."
+
+# Log after command
+du_enabled && du_after=$(repo_du)
+date_after=$(date)
+duration=$(human_duration "$date_before" "$date_after")
+
+if du_enabled
+then
+    # Compute and log difference (converting bytes to MB or GB)
+    du_after_human=$(human_bytes $du_after)
+    du_difference_human=$(diff_bytes $du_after $du_before)
+    du_message="Repo size: $du_after_human (${du_difference_human})"
+fi
+
+log "$command FINISHED.  Duration: $duration  ${du_message}"
+
+[[ $errors -gt 0 ]] && log "Errors: $errors"
+
+# Exit with number of errors, which is perfect for chronic.
+exit $errors
