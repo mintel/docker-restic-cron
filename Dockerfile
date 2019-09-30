@@ -9,6 +9,7 @@ ENV RESTIC_VERSION="0.9.5" \
 
   # Install Let's Encrypt Staging CA so that we can connect "securely"
 RUN apk update \
+  && apk --no-cache upgrade \
   && apk --no-cache add ca-certificates wget bash jq coreutils \
   && wget -O /usr/local/share/ca-certificates/fakelerootx1.crt https://letsencrypt.org/certs/fakelerootx1.pem \
   && wget -O /usr/local/share/ca-certificates/fakeleintermediatex1.crt https://letsencrypt.org/certs/fakeleintermediatex1.pem \
