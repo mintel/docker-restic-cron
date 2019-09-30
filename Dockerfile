@@ -1,8 +1,5 @@
 FROM alpine:3.10
 
-ARG BUILD_DATE
-ARG VCS_REF
-
 ENV RESTIC_VERSION="0.9.5" \
     RESTIC_SHA512="c040dfe9c73a0bc8de46ccdf4657c9937b27a3c1bd25941f40c9efd1702994f54e79f077288e626a5841fbf9bbf642b6d821628cf6b955d88b97f07e5916daac" \
     SUPERCRONIC_VERSION="0.1.9" \
@@ -36,6 +33,9 @@ RUN chmod a+x /entrypoint.sh
 
 USER mintel
 ENTRYPOINT ["/entrypoint.sh"]
+
+ARG BUILD_DATE
+ARG VCS_REF
 
 LABEL org.label-schema.build-date=$BUILD_DATE \
       org.label-schema.vcs-ref=$VCS_REF \
