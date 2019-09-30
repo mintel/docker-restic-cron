@@ -12,7 +12,8 @@ RUN apk update \
   && apk --no-cache add ca-certificates wget bash jq \
   && wget -O /usr/local/share/ca-certificates/fakelerootx1.crt https://letsencrypt.org/certs/fakelerootx1.pem \
   && wget -O /usr/local/share/ca-certificates/fakeleintermediatex1.crt https://letsencrypt.org/certs/fakeleintermediatex1.pem \
-  && update-ca-certificates
+  && update-ca-certificates \
+  && rm -rf /var/cache/apk/*
 
 # Install restic and superchronic
 RUN wget -O /tmp/restic-${RESTIC_VERSION}.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
@@ -23,8 +24,7 @@ RUN wget -O /tmp/restic-${RESTIC_VERSION}.bz2 "https://github.com/restic/restic/
   && bunzip2 -c restic-${RESTIC_VERSION}.bz2 > /usr/local/bin/restic \
   && mv supercronic /usr/local/bin \
   && chmod a+x /usr/local/bin/supercronic \
-  && chmod a+x /usr/local/bin/restic \
-  && rm -rf /var/cache/apk/*
+  && chmod a+x /usr/local/bin/restic
 
 ADD rootfs/ /
 
