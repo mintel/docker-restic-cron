@@ -26,6 +26,8 @@ RUN wget -O /tmp/restic-${RESTIC_VERSION}.bz2 "https://github.com/restic/restic/
   && chmod a+x /usr/local/bin/restic \
   && rm -rf /var/cache/apk/*
 
+ADD rootfs/ /
+
 RUN adduser -D -s /bin/bash mintel
 
 ADD docker-entrypoint.sh /entrypoint.sh
