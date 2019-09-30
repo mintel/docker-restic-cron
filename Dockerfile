@@ -3,15 +3,6 @@ FROM alpine:3.10
 ARG BUILD_DATE
 ARG VCS_REF
 
-LABEL org.label-schema.build-date=$BUILD_DATE \
-      org.label-schema.vcs-ref=$VCS_REF \
-      org.label-schema.vcs-url="https://github.com/mintel/docker-restic-cron.git" \
-      org.label-schema.schema-version="1.0.0-rc1" \
-      org.label-schema.name="restic-cron" \
-      org.label-schema.description="An image with Restic and Superchronic installed, intended to be used as a base for specific backup jobs" \
-      org.label-schema.vendor="Mintel LTD" \
-      maintainer="Francesco Ciocchetti <fciocchetti@mintel.com>"
-
 ENV RESTIC_VERSION="0.9.5" \
     RESTIC_SHA512="c040dfe9c73a0bc8de46ccdf4657c9937b27a3c1bd25941f40c9efd1702994f54e79f077288e626a5841fbf9bbf642b6d821628cf6b955d88b97f07e5916daac" \
     SUPERCRONIC_VERSION="0.1.9" \
@@ -45,3 +36,14 @@ RUN chmod a+x /entrypoint.sh
 
 USER mintel
 ENTRYPOINT ["/entrypoint.sh"]
+
+LABEL org.label-schema.build-date=$BUILD_DATE \
+      org.label-schema.vcs-ref=$VCS_REF \
+      org.label-schema.vcs-url="https://github.com/mintel/docker-restic-cron.git" \
+      org.label-schema.schema-version="1.0.0-rc1" \
+      org.label-schema.name="restic-cron" \
+      org.label-schema.description="An image with Restic and Superchronic installed, intended to be used as a base for specific backup jobs" \
+      org.label-schema.vendor="Mintel LTD" \
+      maintainer="Francesco Ciocchetti <fciocchetti@mintel.com>"
+
+
