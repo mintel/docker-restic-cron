@@ -21,6 +21,7 @@
 # * Defaults
 
 config_dir=${RESTIC_RUNNER_CONFIG_DIR:-$HOME/.config/backup/restic}
+errors=0
 
 # * Variables
 
