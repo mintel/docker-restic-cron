@@ -1,5 +1,8 @@
 # Changelog
 
+## [v0.1.2]
+* Upgrade base system
+
 ## [v0.1.1]
 * Add coreutils for a proper `date` command
 * allow customizing the `restic-runner` `config_dir` using environment variable `RESTIC_RUNNER_CONFIG_DIR`
