@@ -39,7 +39,7 @@ RUN wget -O /tmp/restic-${RESTIC_VERSION}.bz2 "https://github.com/restic/restic/
   && chmod a+x /usr/local/bin/restic
 
 # In case you want to run this as a Kubernetes Cronjob to make sure only one is running at any time add kubelock
-COPY --from=mintel/kubelock:0.0.1 /usr/local/bin/kubelock /usr/local/bin/
+COPY --from=mintel/kubelock:0.1.0 /usr/local/bin/kubelock /usr/local/bin/
 
 ADD rootfs/ /
 
